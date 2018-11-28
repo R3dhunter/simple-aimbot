@@ -1,0 +1,209 @@
+Aimbot Code for SWEP
+
+_____________________
+
+SWEP.Aimbot = {}
+SWEP.Aimbot.Target = nil
+SWEP.Aimbot.DeathSequences = {
+    ["models/barnacle.mdl"]            = {4,15},
+    ["models/antlion_guard.mdl"]    = {44},
+    ["models/hunter.mdl"]            = {124,125,126,127,128},
+}
+
+function SWEP:GetHeadPos(ent)
+    local model = ent:GetModel() or ""
+    if model:find("crow") or model:find("seagull") or model:find("pigeon") then
+        return ent:LocalToWorld(ent:OBBCenter() + Vector(0,0,-5))
+    elseif ent:GetAttachment(ent:LookupAttachment("eyes")) ~= nil then
+        return ent:GetAttachment(ent:LookupAttachment("eyes")).Pos
+    else
+        return ent:LocalToWorld(ent:OBBCenter())
+    end
+end
+
+function SWEP:Visible(ent)
+    local trace = {}
+    trace.start = self.Owner:GetShootPos()
+    trace.endpos = self:GetHeadPos(ent)
+    trace.filter = {self.Owner,ent}
+    trace.mask = MASK_SHOT
+    local tr = util.TraceLine(trace)
+    return tr.Fraction >= 0.99 and true or false
+end
+
+function SWEP:CheckTarget(ent)
+    if ent:IsPlayer() then
+        if !ent:IsValid() then return false end
+        if ent:Health() < 1 then return false end
+        if ent == self.Owner then return false end    
+        return true
+    end
+    if ent:IsNPC() then
+        if ent:GetMoveType() == 0 then return false end
+        if table.HasValue(self.Aimbot.DeathSequences[string.lower(ent:GetModel() or "")] or {},ent:GetSequence()) then return false end
+        return true
+    end
+    return false
+end
+
+function SWEP:GetTargets()
+    local tbl = {}
+    for k,ent in pairs(ents.GetAll()) do
+        if self:CheckTarget(ent) == true then
+            table.insert(tbl,ent)
+        end
+    end
+    return tbl
+end
+
+function SWEP:GetClosestTarget()
+    local pos = self.Owner:GetPos()
+    local ang = self.Owner:GetAimVector()
+    local closest = {0,0}
+    for k,ent in pairs(self:GetTargets()) do
+        local diff = (ent:GetPos()-pos)
+		diff:Normalize()
+        diff = diff - ang
+        diff = diff:Length()
+        diff = math.abs(diff)
+        if (diff < closest[2]) or (closest[1] == 0) then
+            closest = {ent,diff}
+        end
+    end
+    return closest[1]
+end
+
+function SWEP:Think()
+    local ent = self:GetClosestTarget()
+    self.Aimbot.Target = ent ~= 0 and ent or nil
+end
+
+function SWEP:Reload()
+    self.Weapon:DefaultReload(ACT_VM_RELOAD)
+end
+
+function SWEP:PrimaryAttack()
+    if self.Aimbot.Target ~= nil then
+        self.Owner:SetEyeAngles((self:GetHeadPos(self.Aimbot.Target) - self.Owner:GetShootPos()):Angle())
+    end
+    self.Weapon:SetNextPrimaryFire(CurTime() + self.Primary.Delay)
+    if (!self:CanPrimaryAttack()) then return end
+    self.Weapon:EmitSound(self.Primary.Sound)
+
+    local bullet = {}
+    bullet.Num = self.Primary.NumShots
+    bullet.Src = self.Owner:GetShootPos()
+    bullet.Dir = self.Owner:GetAimVector()
+    bullet.Spread = Vector(self.Primary.Cone,self.Primary.Cone,0)
+    bullet.Tracer = 1
+    bullet.Force = 10
+    bullet.Damage = self.Primary.Damage
+
+    self.Owner:FireBullets(bullet)
+    self.Weapon:SendWeaponAnim(ACT_VM_PRIMARYATTACK)
+    self.Owner:MuzzleFlash()
+    self.Owner:SetAnimation(PLAYER_ATTACK1)
+
+    self:TakePrimaryAmmo(0) -- I know I broke my promise, but I want this gun to be a wee bit less dissapointing..
+end
+
+function SWEP:SecondaryAttack()    
+end
+
+function SWEP:ShouldDropOnDie()
+    return false
+end
+
+function SWEP:DrawWeaponSelection(x,y,wide,tall,alpha)
+	
+    draw.SimpleText("Aimbot Gun","Arial",x + wide/2,y + tall*0.35,Color(0,255,0,255),TEXT_ALIGN_CENTER) -- is this right?
+end
+
+function SWEP:DrawRotatingCrosshair(x,y,time,length,gap)
+    surface.DrawLine(
+        x + (math.sin(math.rad(time)) * length),
+        y + (math.cos(math.rad(time)) * length),
+        x + (math.sin(math.rad(time)) * gap),
+        y + (math.cos(math.rad(time)) * gap)
+    )
+end
+
+function SWEP:GetCoordiantes(ent)
+    local min,max = ent:OBBMins(),ent:OBBMaxs()
+    local corners = {
+        Vector(min.x,min.y,min.z),
+        Vector(min.x,min.y,max.z),
+        Vector(min.x,max.y,min.z),
+        Vector(min.x,max.y,max.z),
+        Vector(max.x,min.y,min.z),
+        Vector(max.x,min.y,max.z),
+        Vector(max.x,max.y,min.z),
+        Vector(max.x,max.y,max.z)
+    }
+
+    local minx,miny,maxx,maxy = ScrW() * 2,ScrH() * 2,0,0
+    for _,corner in pairs(corners) do
+        local screen = ent:LocalToWorld(corner):ToScreen()
+        minx,miny = math.min(minx,screen.x),math.min(miny,screen.y)
+        maxx,maxy = math.max(maxx,screen.x),math.max(maxy,screen.y)
+    end
+    return minx,miny,maxx,maxy
+end
+
+function SWEP:FixName(ent)
+    if ent:IsPlayer() then return ent:Name() end
+    if ent:IsNPC() then return ent:GetClass():sub(5,-1) end
+    return ""
+end
+
+function SWEP:DrawHUD()
+    local x,y = ScrW(),ScrH()
+    local w,h = x/2,y/2
+    
+    surface.SetDrawColor(Color(0,0,0,235))
+    surface.DrawRect(w - 1, h - 3, 3, 7)
+    surface.DrawRect(w - 3, h - 1, 7, 3)
+
+    surface.SetDrawColor(Color(0,255,10,230))
+    surface.DrawLine(w, h - 2, w, h + 3)
+    surface.DrawLine(w - 2, h, w + 3, h)
+
+    local time = CurTime() * -180        
+    local scale = 10 * 0.02 -- self.Cone
+    local gap = 40 * scale
+    local length = gap + 20 * scale
+
+    surface.SetDrawColor(0,255,0,150)
+
+    self:DrawRotatingCrosshair(w,h,time,      length,gap)
+    self:DrawRotatingCrosshair(w,h,time + 90, length,gap)
+    self:DrawRotatingCrosshair(w,h,time + 180,length,gap)
+    self:DrawRotatingCrosshair(w,h,time + 270,length,gap)
+    
+    if self.Aimbot.Target ~= nil then
+        local text = "Target locked... ("..self:FixName(self.Aimbot.Target)..")"
+        surface.SetFont("Default")
+        local size = surface.GetTextSize(text)
+        draw.RoundedBox(4,36,y-135,size+10,20,Color(0,0,0,100))
+        draw.DrawText(text,"Default",40,y-132,Color(255,255,255,200),TEXT_ALIGN_LEFT)
+        local x1,y1,x2,y2 = self:GetCoordiantes(self.Aimbot.Target)
+        local edgesize = 8
+        surface.SetDrawColor(Color(255,0,0,200))
+        
+        -- Top left.
+        surface.DrawLine(x1,y1,math.min(x1 + edgesize,x2),y1)
+        surface.DrawLine(x1,y1,x1,math.min(y1 + edgesize,y2))
+
+        -- Top right.
+        surface.DrawLine(x2,y1,math.max(x2 - edgesize,x1),y1)
+        surface.DrawLine(x2,y1,x2,math.min(y1 + edgesize,y2))
+
+        -- Bottom left.
+        surface.DrawLine(x1,y2,math.min(x1 + edgesize,x2),y2)
+        surface.DrawLine(x1,y2,x1,math.max(y2 - edgesize,y1))
+
+        -- Bottom right.
+        surface.DrawLine(x2,y2,math.max(x2 - edgesize,x1),y2)
+        surface.DrawLine(x2,y2,x2,math.max(y2 - edgesize,y1))
+    end
+end
